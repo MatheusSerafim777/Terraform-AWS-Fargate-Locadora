@@ -8,7 +8,7 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-east-1"
+  region = var.aws_region
 
   # evita tags automáticas que podem causar AccessDenied em ambientes com políticas restritas
   default_tags { tags = {} }
@@ -30,7 +30,7 @@ data "aws_caller_identity" "current" {}
 
 # ECS Cluster
 resource "aws_ecs_cluster" "locadora_cluster" {
-  name = "locadora-cluster"
+  name = var.cluster_name
 }
 
 # Security Group: liberar portas do app
@@ -42,8 +42,8 @@ resource "aws_security_group" "locadora_sg" {
   # Frontend React
   ingress {
     description = "React Frontend"
-    from_port   = 5173
-    to_port     = 5173
+    from_port   = var.react_port
+    to_port     = var.react_port
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -51,8 +51,8 @@ resource "aws_security_group" "locadora_sg" {
   # Backend Spring
   ingress {
     description = "Spring Boot API"
-    from_port   = 8080
-    to_port     = 8080
+    from_port   = var.spring_port
+    to_port     = var.spring_port
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -60,8 +60,8 @@ resource "aws_security_group" "locadora_sg" {
   # Postgres
   ingress {
     description = "Postgres"
-    from_port   = 5432
-    to_port     = 5432
+    from_port   = var.postgres_port
+    to_port     = var.postgres_port
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -69,8 +69,8 @@ resource "aws_security_group" "locadora_sg" {
   # PgAdmin
   ingress {
     description = "PgAdmin"
-    from_port   = 80
-    to_port     = 80
+    from_port   = var.pgadmin_port
+    to_port     = var.pgadmin_port
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -86,50 +86,50 @@ resource "aws_security_group" "locadora_sg" {
 }
 
 resource "aws_ecs_task_definition" "locadora_task" {
-  family                   = "locadora-task"
+  family                   = var.task_family
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "1024"
-  memory                   = "2048"
+  cpu                      = var.task_cpu
+  memory                   = var.task_memory
 
-  # Nota: NÃO definimos execution_role_arn nem task_role_arn porque o Lab tem restrições iam:PassRole
+  # Nota: NÃO defini execution_role_arn nem task_role_arn porque o Lab tem restrições iam:PassRole
 
   container_definitions = jsonencode([
     {
       name      = "db_postgres"
-      image     = "postgres:15"
+      image     = var.postgres_image
       essential = true
       portMappings = [
-        { containerPort = 5432, protocol = "tcp" }
+        { containerPort = var.postgres_port, protocol = "tcp" }
       ]
       environment = [
-        { name = "POSTGRES_USER", value = "postgres" },
-        { name = "POSTGRES_PASSWORD", value = "postgres" },
-        { name = "POSTGRES_DB", value = "loc001" }
+        { name = "POSTGRES_USER", value = var.postgres_user },
+        { name = "POSTGRES_PASSWORD", value = var.postgres_password },
+        { name = "POSTGRES_DB", value = var.postgres_db }
       ]
     },
     {
       name      = "spring"
-      image     = "matheusserafim/spring-boot-locadora:1.0"
+      image     = var.spring_image
       essential = true
       portMappings = [
-        { containerPort = 8080, protocol = "tcp" }
+        { containerPort = var.spring_port, protocol = "tcp" }
       ]
       dependsOn = [
         { containerName = "db_postgres", condition = "START" }
       ]
       environment = [
-        { name = "SPRING_DATASOURCE_URL", value = "jdbc:postgresql://localhost:5432/loc001" },
-        { name = "SPRING_DATASOURCE_USERNAME", value = "postgres" },
-        { name = "SPRING_DATASOURCE_PASSWORD", value = "postgres" }
+        { name = "SPRING_DATASOURCE_URL", value = "jdbc:postgresql://localhost:${var.postgres_port}/${var.postgres_db}" },
+        { name = "SPRING_DATASOURCE_USERNAME", value = var.postgres_user },
+        { name = "SPRING_DATASOURCE_PASSWORD", value = var.postgres_password }
       ]
     },
     {
       name      = "react"
-      image     = "matheusserafim/react-locadora:2.0"
+      image     = var.react_image
       essential = true
       portMappings = [
-        { containerPort = 5173, protocol = "tcp" }
+        { containerPort = var.react_port, protocol = "tcp" }
       ]
       dependsOn = [
         { containerName = "spring", condition = "START" }
@@ -137,17 +137,17 @@ resource "aws_ecs_task_definition" "locadora_task" {
     },
     {
       name      = "pg_admin"
-      image     = "dpage/pgadmin4"
+      image     = var.pgadmin_image
       essential = false
       portMappings = [
-        { containerPort = 80, protocol = "tcp" }
+        { containerPort = var.pgadmin_port, protocol = "tcp" }
       ]
       dependsOn = [
         { containerName = "db_postgres", condition = "START" }
       ]
       environment = [
-        { name = "PGADMIN_DEFAULT_EMAIL", value = "postgres@gmail.com" },
-        { name = "PGADMIN_DEFAULT_PASSWORD", value = "postgres" }
+        { name = "PGADMIN_DEFAULT_EMAIL", value = var.pgadmin_email },
+        { name = "PGADMIN_DEFAULT_PASSWORD", value = var.pgadmin_password }
       ]
     },
   ])
@@ -155,10 +155,10 @@ resource "aws_ecs_task_definition" "locadora_task" {
 
 # ECS Service
 resource "aws_ecs_service" "locadora_service" {
-  name            = "locadora-service"
+  name            = var.service_name
   cluster         = aws_ecs_cluster.locadora_cluster.id
   task_definition = aws_ecs_task_definition.locadora_task.arn
-  desired_count   = 1
+  desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
   network_configuration {
@@ -166,30 +166,4 @@ resource "aws_ecs_service" "locadora_service" {
     security_groups  = [aws_security_group.locadora_sg.id]
     assign_public_ip = true
   }
-}
-
-# Outputs
-output "cluster_name" {
-  description = "ECS Cluster name"
-  value       = aws_ecs_cluster.locadora_cluster.name
-}
-
-output "service_name" {
-  description = "ECS Service name"
-  value       = aws_ecs_service.locadora_service.name
-}
-
-output "task_definition" {
-  description = "Task Definition ARN"
-  value       = aws_ecs_task_definition.locadora_task.arn
-}
-
-output "security_group_id" {
-  description = "Security Group ID"
-  value       = aws_security_group.locadora_sg.id
-}
-
-output "account_id" {
-  description = "AWS Account ID"
-  value       = data.aws_caller_identity.current.account_id
 }
